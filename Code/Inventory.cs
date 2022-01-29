@@ -7,7 +7,10 @@ namespace Heph.Unity.Inventory
     /// </summary>
     public class Inventory
     {
-        protected virtual int SlotCount { get; set; }
+        /// <summary>
+        /// Capacity of the inventory.
+        /// </summary>
+        public virtual int SlotCount { get; protected set; }
         /// <summary>
         /// Do not modify (add or remove items) the list directly, it might cause some items to share the same slots. Use the "Add", "AddTo", "Remove", and "Move" methods instead.<br/>
         /// Do not modify the items' "SlotIndex" and "OccupiedSlotCount" properties after they are added to the list.
@@ -26,7 +29,7 @@ namespace Heph.Unity.Inventory
         {
             get
             {
-                if (slot >= 0 && slot < SlotCount)
+                if (slot < SlotCount)
                 {
                     for (int i = 0; i < Items.Count; i++)
                     {
@@ -41,13 +44,10 @@ namespace Heph.Unity.Inventory
             }
         }
         /// <summary>
-        /// Gets the number of the items that are stored in the inventory.
+        /// <inheritdoc cref="this[int]"/>
         /// </summary>
-        public virtual int GetItemCount() => Items.Count;
-        /// <summary>
-        /// Gets the slot count (capacity) of the inventory.
-        /// </summary>
-        public virtual int GetSlotCount() => SlotCount;
+        /// <returns><inheritdoc cref="this[int]"/></returns>
+        public virtual IInventoryItem At(int slot) => this[slot];
         /// <summary>
         /// Sets the slot count (capacity) of the inventory to the <paramref name="newSlotCount"/>
         /// </summary>
@@ -78,20 +78,7 @@ namespace Heph.Unity.Inventory
         /// Checkes if the <paramref name="item"/> is already stored in the inventory.
         /// </summary>
         /// <returns>true if the <paramref name="item"/> is already stored in the inventory; othrewise, false.</returns>
-        public virtual bool Exists(IInventoryItem item)
-        {
-            if (item != null)
-            {
-                for (int i = 0; i < Items.Count; i++)
-                {
-                    if (item == Items[i])
-                    {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
+        public virtual bool Exists(IInventoryItem item) => item != null && item == this[item.SlotIndex];
         /// <summary>
         /// Adds the item to the first available slot.
         /// </summary>
@@ -105,14 +92,10 @@ namespace Heph.Unity.Inventory
                 {
                     for (int j = 0; j < item.OccupiedSlotCount; j++)
                     {
-                        for (int k = 0; k < Items.Count; k++)
+                        if (this[i + j] is IInventoryItem inventoryItem) // slot is occupied by an item
                         {
-                            IInventoryItem inventoryItem = Items[k];
-                            if (inventoryItem.SlotIndex <= i + j && inventoryItem.SlotIndex + inventoryItem.OccupiedSlotCount > i + j) // the slot is occupied by an item
-                            {
-                                i = inventoryItem.SlotIndex + inventoryItem.OccupiedSlotCount; // get to the next slot that is not occupied by this item
-                                goto NEXT; // Don't check the other slots since one of the necessary slots is occupied.
-                            }
+                            i = inventoryItem.SlotIndex + inventoryItem.OccupiedSlotCount; // get to the next slot that is not occupied by this item
+                            break;
                         }
                         if (j + 1 == item.OccupiedSlotCount) // All of the necessary slots are empty, we can add the item.
                         {
@@ -121,7 +104,6 @@ namespace Heph.Unity.Inventory
                             return true;
                         }
                     }
-                NEXT:;
                 }
             }
             return false;
@@ -133,21 +115,17 @@ namespace Heph.Unity.Inventory
         /// true if the <paramref name="item"/> is added successfully; otherwise false. 
         /// This method also returns false if the item is already stored in the inventory, to safely change an items slot index call the 'Move' method.
         /// </returns>
-        public bool AddTo(IInventoryItem item)
+        public virtual bool AddTo(IInventoryItem item)
         {
-            if (Exists(item) || item.SlotIndex < 0 || item.SlotIndex + item.OccupiedSlotCount > SlotCount)
+            if (Exists(item) || item.SlotIndex + item.OccupiedSlotCount > SlotCount)
             {
                 return false;
             }
             for (int i = item.SlotIndex; i < item.SlotIndex + item.OccupiedSlotCount; i++)
             {
-                for (int j = 0; j < Items.Count; j++)
+                if (this[i] != null)
                 {
-                    IInventoryItem inventoryItem = Items[j];
-                    if (inventoryItem.SlotIndex <= i && inventoryItem.SlotIndex + inventoryItem.OccupiedSlotCount > i)  // the slot is occupied by an item
-                    {
-                        return false;
-                    }
+                    return false;
                 }
             }
             Items.Add(item);
@@ -164,16 +142,9 @@ namespace Heph.Unity.Inventory
         /// <returns><inheritdoc cref="Remove(IInventoryItem)"/></returns>
         public virtual bool Remove(int slot)
         {
-            if (slot >= 0 && slot < SlotCount)
+            if (this[slot] is IInventoryItem item)
             {
-                for (int i = 0; i < Items.Count; i++)
-                {
-                    IInventoryItem inventoryItem = Items[i];
-                    if (inventoryItem.SlotIndex <= slot && inventoryItem.SlotIndex + inventoryItem.OccupiedSlotCount > slot) // the slot is occupied by an item
-                    {
-                        return Remove(inventoryItem);
-                    }
-                }
+                return Remove(item);
             }
             return false;
         }
@@ -184,7 +155,7 @@ namespace Heph.Unity.Inventory
         /// <returns>true if found and moved the item successfully; otherwise, false.</returns>
         public virtual bool Move(IInventoryItem item, int targetSlot)
         {
-            if (Exists(item) && targetSlot >= 0 && targetSlot + item.OccupiedSlotCount <= SlotCount)
+            if (Exists(item) && targetSlot + item.OccupiedSlotCount <= SlotCount)
             {
                 // Check if an item occupies the targeted slots, if there is more than one item fail the function.
                 IInventoryItem targetItem = this[targetSlot];
@@ -233,5 +204,68 @@ namespace Heph.Unity.Inventory
         /// </summary>
         /// <returns>true if found and moved the item successfully; otherwise, false.</returns>
         public virtual bool Move(int currentSlot, int targetSlot) => Move(this[currentSlot], targetSlot);
+        /// <summary>
+        /// <inheritdoc cref="MoveToInventory(Inventory, int, int, bool)"/>
+        /// </summary>
+        /// <returns><inheritdoc cref="MoveToInventory(Inventory, int, int, bool)"/></returns>
+        public virtual bool MoveToInventory(Inventory targetInventory, int currentSlot, int targetSlot) => MoveToInventory(targetInventory, this[currentSlot], targetSlot, true);
+        /// <summary>
+        /// Moves the item at the <paramref name="currentSlot"/> of this inventory to the <paramref name="targetSlot"/> of the <paramref name="targetInventory"/>.
+        /// </summary>
+        /// <returns>true if the item is successfully moved. Otherwise, false.</returns>
+        public virtual bool MoveToInventory(Inventory targetInventory, int currentSlot, int targetSlot, bool switchItems) => MoveToInventory(targetInventory, this[currentSlot], targetSlot, switchItems);
+        /// <summary>
+        /// <inheritdoc cref="MoveToInventory(Inventory, IInventoryItem, int, bool)"/>
+        /// </summary>
+        /// <returns><inheritdoc cref="MoveToInventory(Inventory, IInventoryItem, int, bool)"/></returns>
+        public virtual bool MoveToInventory(Inventory targetInventory, IInventoryItem item, int targetSlot) => MoveToInventory(targetInventory, item, targetSlot, true);
+        /// <summary>
+        /// Moves the <paramref name="item"/> from this inventory to the <paramref name="targetSlot"/> of the <paramref name="targetInventory"/>.
+        /// </summary>
+        /// <returns><inheritdoc cref="MoveToInventory(Inventory, int, int, bool)"/></returns>
+        public virtual bool MoveToInventory(Inventory targetInventory, IInventoryItem item, int targetSlot, bool switchItems)
+        {
+            if (Exists(item))
+            {
+                if (targetInventory == this)
+                {
+                    return Move(item, targetSlot);
+                }
+                else
+                {
+                    int currentSlot = item.SlotIndex;
+                    IInventoryItem targetInventoryItem = targetInventory[targetSlot];
+                    if (targetInventoryItem == null)
+                    {
+                        Remove(item);
+                        item.SlotIndex = targetSlot;
+                        if (!targetInventory.AddTo(item)) // Add to the target slot.
+                        {
+                            item.SlotIndex = currentSlot; // Couldn't add the item to the target inventory, add it back to its original inventory and slot.
+                            AddTo(item);
+                            return false;
+                        }
+                        return true;
+                    }
+                    else if (switchItems)
+                    {
+                        Remove(item);
+                        item.SlotIndex = targetSlot;
+                        targetInventory.Remove(targetInventoryItem);
+                        targetInventoryItem.SlotIndex = currentSlot;
+                        if (!targetInventory.AddTo(item) || !AddTo(targetInventoryItem)) // switch failed, Add the items back to their original inventory and slot.
+                        {
+                            item.SlotIndex = currentSlot;
+                            targetInventoryItem.SlotIndex = targetSlot;
+                            AddTo(item);
+                            targetInventory.AddTo(targetInventoryItem);
+                            return false;
+                        }
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
     }
 }
