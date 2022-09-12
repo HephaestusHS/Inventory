@@ -1,271 +1,285 @@
-﻿using System.Collections.Generic;
+﻿using System.Collections;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 
-namespace Heph.Unity.Inventory
+namespace HephUnity.Inventory
 {
     /// <summary>
-    /// A simple one-dimensional inventory.
+    /// A class for storing and managing inventory items.
     /// </summary>
-    public class Inventory
+    public sealed class Inventory : IEnumerable<IInventoryItem>
     {
-        /// <summary>
-        /// Capacity of the inventory.
-        /// </summary>
-        public virtual int SlotCount { get; protected set; }
-        /// <summary>
-        /// Do not modify (add or remove items) the list directly, it might cause some items to share the same slots. Use the "Add", "AddTo", "Remove", and "Move" methods instead.<br/>
-        /// Do not modify the items' "SlotIndex" and "OccupiedSlotCount" properties after they are added to the list.
-        /// </summary>
-        public virtual List<IInventoryItem> Items { get; }
-        public Inventory(int slotCount)
+        private struct InventorySlot
         {
-            SlotCount = slotCount;
-            Items = new List<IInventoryItem>();
+            public IInventoryItem? StoredItem { get; set; }
+            public uint StackCount { get; set; }
+            /// <summary>
+            /// The index of the slot which the item is stored.
+            /// </summary>
+            public uint? ItemSlotIndex { get; set; }
         }
         /// <summary>
-        /// Gets the item by its <paramref name="slot"/> from the inventory.
+        /// The number of rows that the inventory contains.
         /// </summary>
-        /// <returns>If found, the item that occupies the <paramref name="slot"/>; otherwise, null.</returns>
-        public virtual IInventoryItem this[int slot]
+        public uint RowCount { get; private set; }
+        /// <summary>
+        /// The number of columns that the inventory contains.
+        /// </summary>
+        public uint ColCount { get; private set; }
+        /// <summary>
+        /// The number of items the inventory consists of.
+        /// </summary>
+        public uint ItemCount { get; private set; }
+        private InventorySlot[] slots;
+        /// <summary>
+        /// Initializes a new instance of the <seealso cref="Inventory"/> class that is empty and has no capacity.
+        /// </summary>
+        public Inventory() : this(0u, 0u) { }
+        /// <summary>
+        /// Initializes a new instance of the <seealso cref="Inventory"/> class that is empty and has the capacity of <paramref name="rowCount"/> * <paramref name="colCount"/>.
+        /// </summary>
+        /// <param name="rowCount">The number of rows that the inventory contains.</param>
+        /// <param name="colCount">The number of columns that the inventory contains.</param>
+        public Inventory(uint rowCount, uint colCount)
+        {
+            RowCount = rowCount;
+            ColCount = colCount;
+            slots = new InventorySlot[RowCount * ColCount];
+        }
+        public IInventoryItem this[uint row, uint col]
         {
             get
             {
-                if (slot < SlotCount)
-                {
-                    for (int i = 0; i < Items.Count; i++)
-                    {
-                        IInventoryItem inventoryItem = Items[i];
-                        if (inventoryItem.SlotIndex <= slot && inventoryItem.SlotIndex + inventoryItem.OccupiedSlotCount > slot) // the slot is occupied by an item
-                        {
-                            return inventoryItem;
-                        }
-                    }
-                }
-                return null;
+                if (row > RowCount) throw new IndexOutOfRangeException("row must be lesser than or equal to RowCount");
+                if (col > ColCount) throw new IndexOutOfRangeException("col must be lesser than or equal to ColCount");
+                return slots[GetItemSlotIndex(ref row, ref col)].StoredItem;
             }
+            set => InternalAdd(ref value, ref row, ref col);
         }
         /// <summary>
-        /// <inheritdoc cref="this[int]"/>
+        /// Adds a new item if there is available space.
         /// </summary>
-        /// <returns><inheritdoc cref="this[int]"/></returns>
-        public virtual IInventoryItem At(int slot) => this[slot];
-        /// <summary>
-        /// Sets the slot count (capacity) of the inventory to the <paramref name="newSlotCount"/>
-        /// </summary>
-        /// <returns>The removed inventory items. Items are removed due to the one or more of the occupied slots by that item no longer exists.</returns>
-        public virtual List<IInventoryItem> SetSlotCount(int newSlotCount)
+        /// <param name="item">The item which will be added.</param>
+        public void Add(IInventoryItem item)
         {
-            List<IInventoryItem> removedItems = new List<IInventoryItem>();
-            if (newSlotCount >= 0)
+            if (item != null)
             {
-                if (newSlotCount < SlotCount)
+                uint i;
+                for (i = 0u; i < slots.Length; i++) // if the inventory already contains the item and there is enough space in the stack, just increase the stack.
                 {
-                    for (int i = 0; i < Items.Count; i++)
+                    if (slots[i].StoredItem != null)
                     {
-                        IInventoryItem inventoryItem = Items[i];
-                        if (inventoryItem.SlotIndex + inventoryItem.OccupiedSlotCount > newSlotCount) // one or more of the occupied slots by the item no longer exists, thus remove the item.
+                        if (CanIncreaseStack(ref item, ref slots[i]))
                         {
-                            Remove(inventoryItem);
-                            removedItems.Add(inventoryItem);
-                            i--; // Since the item is removed from the list item count of the list and the indices of the items are decreased.
+                            slots[i].StackCount++;
+                            return;
                         }
+                        i += slots[i].StoredItem.ColSize - 1u;
+                    }
+                    else if (slots[i].ItemSlotIndex is uint slotIndex)
+                    {
+                        i += slots[slotIndex].StoredItem.ColSize - 1u;
                     }
                 }
-                SlotCount = newSlotCount;
-            }
-            return removedItems;
-        }
-        /// <summary>
-        /// Checkes if the <paramref name="item"/> is already stored in the inventory.
-        /// </summary>
-        /// <returns>true if the <paramref name="item"/> is already stored in the inventory; othrewise, false.</returns>
-        public virtual bool Exists(IInventoryItem item) => item != null && item == this[item.SlotIndex];
-        /// <summary>
-        /// Adds the item to the first available slot.
-        /// </summary>
-        /// <returns>True if added successfully, false if the function has failed due to insufficient capacity.</returns>
-        public virtual bool Add(IInventoryItem item)
-        {
-            if (!Exists(item)) // if the item is already stored in the inventory, fail the function.
-            {
-                int i = 0;
-                while (i + item.OccupiedSlotCount <= SlotCount)
+                if (item.RowSize > RowCount) throw new IndexOutOfRangeException("item's row size must be lesser than or equal to RowCount");
+                if (item.ColSize > ColCount) throw new IndexOutOfRangeException("item's col size must be lesser than or equal to ColCount");
+                uint rowEnd = RowCount - item.RowSize;
+                uint colEnd = ColCount - item.ColSize;
+                for (i = 0u; i < rowEnd; i++)
                 {
-                    for (int j = 0; j < item.OccupiedSlotCount; j++)
+                    for (uint j = 0u; j < colEnd; j++)
                     {
-                        if (this[i + j] is IInventoryItem inventoryItem) // slot is occupied by an item
+                        if (InternalAdd(ref item, ref i, ref j))
                         {
-                            i = inventoryItem.SlotIndex + inventoryItem.OccupiedSlotCount; // get to the next slot that is not occupied by this item
-                            break;
-                        }
-                        if (j + 1 == item.OccupiedSlotCount) // All of the necessary slots are empty, we can add the item.
-                        {
-                            item.SlotIndex = i;
-                            Items.Add(item);
-                            return true;
+                            return;
                         }
                     }
                 }
             }
-            return false;
         }
         /// <summary>
-        /// Adds the item to the specified slot. Slot is specified by the <paramref name="item"/>.SlotIndex property.
+        /// Adds a new item to the desired row and column.
         /// </summary>
-        /// <returns>
-        /// true if the <paramref name="item"/> is added successfully; otherwise false. 
-        /// This method also returns false if the item is already stored in the inventory, to safely change an items slot index call the 'Move' method.
-        /// </returns>
-        public virtual bool AddTo(IInventoryItem item)
+        /// <param name="item">The item which will be added.</param>
+        /// <param name="row">A zero-based number that specifies at which row the item will be added to.</param>
+        /// <param name="col">A zero-based number that specifies at which column the item will be added to.</param>
+        /// <exception cref="IndexOutOfRangeException"></exception>
+        public void Add(IInventoryItem item, uint row, uint col) => InternalAdd(ref item, ref row, ref col);
+        /// <summary>
+        /// Finds and removes the <paramref name="item"/>.
+        /// </summary>
+        /// <param name="item">The item which will be removed.</param>
+        /// <exception cref="IndexOutOfRangeException"></exception>
+        public void Remove(IInventoryItem item)
         {
-            if (Exists(item) || item.SlotIndex + item.OccupiedSlotCount > SlotCount)
+            if (item != null)
             {
-                return false;
-            }
-            for (int i = item.SlotIndex; i < item.SlotIndex + item.OccupiedSlotCount; i++)
-            {
-                if (this[i] != null)
+                for (uint i = 0u; i < slots.Length; i++)
                 {
-                    return false;
+                    if (slots[i].StoredItem != null && slots[i].StoredItem.Equals(item))
+                    {
+                        InternalRemove(ref i, false);
+                        return;
+                    }
                 }
             }
-            Items.Add(item);
-            return true;
         }
         /// <summary>
-        /// Removes the <paramref name="item"/> from the inventory.
+        /// Removes the item at the desired row and column.
         /// </summary>
-        /// <returns>true if the item is successfully found and removed; otherwise, false.</returns>
-        public virtual bool Remove(IInventoryItem item) => Items.Remove(item);
-        /// <summary>
-        /// Removes the item that occupies the <paramref name="slot"/> from the inventory.
-        /// </summary>
-        /// <returns><inheritdoc cref="Remove(IInventoryItem)"/></returns>
-        public virtual bool Remove(int slot)
+        /// <param name="row">A zero-based number that specifies at which row the item to remove is.</param>
+        /// <param name="col">A zero-based number that specifies at which column the item to remove is.</param>
+        /// <returns>If any item is found and removed, the item; otherwise, null.</returns>
+        /// <exception cref="IndexOutOfRangeException"></exception>
+        public IInventoryItem Remove(uint row, uint col)
         {
-            if (this[slot] is IInventoryItem item)
-            {
-                return Remove(item);
-            }
-            return false;
+            if (row > RowCount) throw new IndexOutOfRangeException("row must be lesser than or equal to RowCount");
+            if (col > ColCount) throw new IndexOutOfRangeException("col must be lesser than or equal to ColCount");
+            uint index = GetItemSlotIndex(ref row, ref col);
+            IInventoryItem removedItem = slots[index].StoredItem;
+            InternalRemove(ref index, false);
+            return removedItem;
         }
         /// <summary>
-        /// Moves the <paramref name="item"/> to the <paramref name="targetSlot"/>.
-        /// If the <paramref name="targetSlot"/> is occupied, switches the slots of the items. If the item switch is not possible the function fails.
+        /// Changes the capacity of the inventory to <paramref name="newRowCount"/> * <paramref name="newColCount"/>
         /// </summary>
-        /// <returns>true if found and moved the item successfully; otherwise, false.</returns>
-        public virtual bool Move(IInventoryItem item, int targetSlot)
+        /// <param name="newRowCount">The number of rows that the inventory will contain.</param>
+        /// <param name="newColCount">The number of columns that the inventory will contain.</param>
+        public void Resize(uint newRowCount, uint newColCount)
         {
-            if (Exists(item) && targetSlot + item.OccupiedSlotCount <= SlotCount)
+            uint newSize = newRowCount * newColCount;
+            uint oldSize = RowCount * ColCount;
+            uint minSize = oldSize;
+            uint i;
+            if (newSize < oldSize) // new size is smaller than the old size, hence we need to remove every item that occupies a slot that no longer exists.
             {
-                // Check if an item occupies the targeted slots, if there is more than one item fail the function.
-                IInventoryItem targetItem = this[targetSlot];
-                for (int i = 1; i < item.OccupiedSlotCount; i++)
+                minSize = newSize;
+                uint index;
+                for (i = newSize; i < oldSize; i++)
                 {
-                    IInventoryItem tempItem = this[targetSlot + i];
-                    if (tempItem != null && tempItem != targetItem)
+                    index = GetItemSlotIndex(ref i);
+                    InternalRemove(ref index, true);
+                }
+            }
+            RowCount = newRowCount;
+            ColCount = newColCount;
+            InventorySlot[] tempSlots = new InventorySlot[newSize];
+            for (i = 0u; i < minSize; i++) // Copy the slots to the temp slots.
+            {
+                tempSlots[i] = slots[i];
+            }
+            slots = tempSlots;
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)] // Suggest the compiler to make this method inline. You can think of this as the inline keyword in C++.
+        private uint ToIndex(ref uint row, ref uint col) => row * ColCount + col;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint GetItemSlotIndex(ref uint index) => slots[index].ItemSlotIndex ?? index;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint GetItemSlotIndex(ref uint row, ref uint col)
+        {
+            uint index = ToIndex(ref row, ref col);
+            return slots[index].ItemSlotIndex ?? index;
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint IndexToRow(ref uint index) => index / ColCount;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint IndexToCol(ref uint index) => index % ColCount;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool CanIncreaseStack(ref IInventoryItem value, ref InventorySlot slot) => 
+                     slot.StoredItem.GetType() == value.GetType()
+                     && slot.StoredItem.Equals(value)
+                     && slot.StoredItem.GetType().GetCustomAttribute<MaxStackCountAttribute>() is MaxStackCountAttribute attribute
+                     && attribute.MaxStackCount > slot.StackCount;
+        private bool InternalAdd(ref IInventoryItem value, ref uint row, ref uint col)
+        {
+            if (value != null)
+            {
+                uint rowEnd = row + value.RowSize;
+                uint colEnd = col + value.ColSize;
+                if (rowEnd > RowCount) throw new IndexOutOfRangeException("row + item.RowSize must be lesser than or equal to RowCount");
+                if (colEnd > ColCount) throw new IndexOutOfRangeException("col + item.ColSize must be lesser than or equal to ColCount");
+                uint i, j;
+                for (i = row; i < rowEnd; i++)
+                {
+                    for (j = col; j < colEnd; j++)
                     {
-                        if (targetItem != null)
+                        uint slotIndex = GetItemSlotIndex(ref i, ref j);
+                        // if there is an item in the target slot and that item is not the item we are trying to add.
+                        if (slots[slotIndex].StoredItem != null)
                         {
-                            return false; // there are more than one item that occupies the necessary slots.
-                        }
-                        else
-                        {
-                            targetItem = tempItem;
+                            // if the item we are trying to add is same type as the current item in the slot and there is enough space in the stack, add to the stack.
+                            if (CanIncreaseStack(ref value, ref slots[slotIndex]))
+                            {
+                                slots[slotIndex].StackCount++;
+                                ItemCount++;
+                                return true;
+                            }
+                            return false;
                         }
                     }
                 }
-                Remove(item);
-                if (targetItem == null) // if the targeted slotes are empty, simply add the item.
+                // all slots that we need are empty, add the item to the targeted slot.
+                uint index = ToIndex(ref row, ref col);
+                slots[index].StoredItem = value;
+                slots[index].StackCount = 1u;
+                for (i = row; i < rowEnd; i++) // set the other slots' ItemSlotIndex property.
                 {
-                    item.SlotIndex = targetSlot;
-                    Items.Add(item);
-                    return true;
+                    for (j = col; j < colEnd; j++)
+                    {
+                        slots[GetItemSlotIndex(ref i, ref j)].ItemSlotIndex = index;
+                    }
                 }
-                // if there is an item occupying one or more of the targeted slots move it to the items (the parameters) slot.
-                Remove(targetItem);
-                int oldTargetItemSlotIndex = targetItem.SlotIndex;
-                targetItem.SlotIndex = item.SlotIndex;
-                if (!AddTo(targetItem)) // if cannot move the target item to the items (the parameters) slot, revert changes and return false. 
-                {
-                    targetItem.SlotIndex = oldTargetItemSlotIndex;
-                    Items.Add(targetItem);
-                    Items.Add(item);
-                    return false;
-                }
-                item.SlotIndex = targetSlot; // if target item is successfully moved, finish the the process.
-                Items.Add(item);
+                ItemCount++;
                 return true;
             }
             return false;
         }
-        /// <summary>
-        /// Finds the item by its <paramref name="currentSlot"/> and moves it to the <paramref name="targetSlot"/>.
-        /// If the <paramref name="targetSlot"/> is occupied, switches the slots of the items. If the item switch is not possible the function fails.
-        /// </summary>
-        /// <returns>true if found and moved the item successfully; otherwise, false.</returns>
-        public virtual bool Move(int currentSlot, int targetSlot) => Move(this[currentSlot], targetSlot);
-        /// <summary>
-        /// <inheritdoc cref="MoveToInventory(Inventory, int, int, bool)"/>
-        /// </summary>
-        /// <returns><inheritdoc cref="MoveToInventory(Inventory, int, int, bool)"/></returns>
-        public virtual bool MoveToInventory(Inventory targetInventory, int currentSlot, int targetSlot) => MoveToInventory(targetInventory, this[currentSlot], targetSlot, true);
-        /// <summary>
-        /// Moves the item at the <paramref name="currentSlot"/> of this inventory to the <paramref name="targetSlot"/> of the <paramref name="targetInventory"/>.
-        /// </summary>
-        /// <returns>true if the item is successfully moved. Otherwise, false.</returns>
-        public virtual bool MoveToInventory(Inventory targetInventory, int currentSlot, int targetSlot, bool switchItems) => MoveToInventory(targetInventory, this[currentSlot], targetSlot, switchItems);
-        /// <summary>
-        /// <inheritdoc cref="MoveToInventory(Inventory, IInventoryItem, int, bool)"/>
-        /// </summary>
-        /// <returns><inheritdoc cref="MoveToInventory(Inventory, IInventoryItem, int, bool)"/></returns>
-        public virtual bool MoveToInventory(Inventory targetInventory, IInventoryItem item, int targetSlot) => MoveToInventory(targetInventory, item, targetSlot, true);
-        /// <summary>
-        /// Moves the <paramref name="item"/> from this inventory to the <paramref name="targetSlot"/> of the <paramref name="targetInventory"/>.
-        /// </summary>
-        /// <returns><inheritdoc cref="MoveToInventory(Inventory, int, int, bool)"/></returns>
-        public virtual bool MoveToInventory(Inventory targetInventory, IInventoryItem item, int targetSlot, bool switchItems)
+        private void InternalRemove(ref uint index, bool removeAll)
         {
-            if (Exists(item))
+            if (slots[index].StoredItem != null)
             {
-                if (targetInventory == this)
+                uint row = IndexToRow(ref index);
+                uint col = IndexToCol(ref index);
+                if (removeAll || slots[index].StackCount == 0u || slots[index].StackCount == 1u)
                 {
-                    return Move(item, targetSlot);
+                    uint rowEnd = row + slots[index].StoredItem.RowSize;
+                    uint colEnd = col + slots[index].StoredItem.ColSize;
+                    if (rowEnd > RowCount) throw new IndexOutOfRangeException("row + item.RowSize must be lesser than or equal to RowCount");
+                    if (colEnd > ColCount) throw new IndexOutOfRangeException("col + item.ColSize must be lesser than or equal to ColCount");
+                    slots[index].StoredItem = null;
+                    slots[index].StackCount = 0u;
+                    for (uint i = row; i < rowEnd; i++)
+                    {
+                        for (uint j = col; j < colEnd; j++)
+                        {
+                            slots[ToIndex(ref i, ref j)].ItemSlotIndex = null;
+                        }
+                    }
                 }
                 else
                 {
-                    int currentSlot = item.SlotIndex;
-                    IInventoryItem targetInventoryItem = targetInventory[targetSlot];
-                    if (targetInventoryItem == null)
-                    {
-                        Remove(item);
-                        item.SlotIndex = targetSlot;
-                        if (!targetInventory.AddTo(item)) // Add to the target slot.
-                        {
-                            item.SlotIndex = currentSlot; // Couldn't add the item to the target inventory, add it back to its original inventory and slot.
-                            AddTo(item);
-                            return false;
-                        }
-                        return true;
-                    }
-                    else if (switchItems)
-                    {
-                        Remove(item);
-                        item.SlotIndex = targetSlot;
-                        targetInventory.Remove(targetInventoryItem);
-                        targetInventoryItem.SlotIndex = currentSlot;
-                        if (!targetInventory.AddTo(item) || !AddTo(targetInventoryItem)) // switch failed, Add the items back to their original inventory and slot.
-                        {
-                            item.SlotIndex = currentSlot;
-                            targetInventoryItem.SlotIndex = targetSlot;
-                            AddTo(item);
-                            targetInventory.AddTo(targetInventoryItem);
-                            return false;
-                        }
-                        return true;
-                    }
+                    slots[index].StackCount--;
+                }
+                ItemCount--;
+            }
+        }
+        /// <inheritdoc/>
+        public IEnumerator<IInventoryItem> GetEnumerator()
+        {
+            for (uint i = 0u; i < slots.Length; i++)
+            {
+                if (slots[i].StoredItem != null)
+                {
+                    yield return slots[i].StoredItem;
+                    i += slots[i].StoredItem.ColSize - 1u;
+                }
+                else if (slots[i].ItemSlotIndex is uint slotIndex)
+                {
+                    i += slots[slotIndex].StoredItem.ColSize - 1u; // skip the occupied slots with the items we have already returned.
                 }
             }
-            return false;
         }
+        /// <inheritdoc/>
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }
