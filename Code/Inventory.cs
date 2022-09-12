@@ -9,7 +9,7 @@ namespace HephUnity.Inventory
     /// </summary>
     public sealed class Inventory : IEnumerable<IInventoryItem>
     {
-        private struct InventorySlot
+        private class InventorySlot
         {
             public IInventoryItem? StoredItem { get; set; }
             public uint StackCount { get; set; }
@@ -52,7 +52,7 @@ namespace HephUnity.Inventory
             {
                 if (row > RowCount) throw new IndexOutOfRangeException("row must be lesser than or equal to RowCount");
                 if (col > ColCount) throw new IndexOutOfRangeException("col must be lesser than or equal to ColCount");
-                return slots[GetItemSlotIndex(ref row, ref col)].StoredItem;
+                return slots[GetItemSlotIndex(ref row, ref col)]?.StoredItem;
             }
             set => InternalAdd(ref value, ref row, ref col);
         }
@@ -67,18 +67,21 @@ namespace HephUnity.Inventory
                 uint i;
                 for (i = 0u; i < slots.Length; i++) // if the inventory already contains the item and there is enough space in the stack, just increase the stack.
                 {
-                    if (slots[i].StoredItem != null)
+                    if (slots[i] != null)
                     {
-                        if (CanIncreaseStack(ref item, ref slots[i]))
+                        if (slots[i].StoredItem != null)
                         {
-                            slots[i].StackCount++;
-                            return;
+                            if (CanIncreaseStack(ref item, ref slots[i]))
+                            {
+                                slots[i].StackCount++;
+                                return;
+                            }
+                            i += slots[i].StoredItem.ColSize - 1u;
                         }
-                        i += slots[i].StoredItem.ColSize - 1u;
-                    }
-                    else if (slots[i].ItemSlotIndex is uint slotIndex)
-                    {
-                        i += slots[slotIndex].StoredItem.ColSize - 1u;
+                        else if (slots[i].ItemSlotIndex is uint slotIndex)
+                        {
+                            i += slots[slotIndex].StoredItem.ColSize - 1u;
+                        }
                     }
                 }
                 if (item.RowSize > RowCount) throw new IndexOutOfRangeException("item's row size must be lesser than or equal to RowCount");
@@ -116,7 +119,7 @@ namespace HephUnity.Inventory
             {
                 for (uint i = 0u; i < slots.Length; i++)
                 {
-                    if (slots[i].StoredItem != null && slots[i].StoredItem.Equals(item))
+                    if (slots[i]?.StoredItem != null && slots[i].StoredItem.Equals(item))
                     {
                         InternalRemove(ref i, false);
                         return;
@@ -136,7 +139,7 @@ namespace HephUnity.Inventory
             if (row > RowCount) throw new IndexOutOfRangeException("row must be lesser than or equal to RowCount");
             if (col > ColCount) throw new IndexOutOfRangeException("col must be lesser than or equal to ColCount");
             uint index = GetItemSlotIndex(ref row, ref col);
-            IInventoryItem removedItem = slots[index].StoredItem;
+            IInventoryItem removedItem = slots[index]?.StoredItem;
             InternalRemove(ref index, false);
             return removedItem;
         }
@@ -173,19 +176,19 @@ namespace HephUnity.Inventory
         [MethodImpl(MethodImplOptions.AggressiveInlining)] // Suggest the compiler to make this method inline. You can think of this as the inline keyword in C++.
         private uint ToIndex(ref uint row, ref uint col) => row * ColCount + col;
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint GetItemSlotIndex(ref uint index) => slots[index].ItemSlotIndex ?? index;
+        private uint GetItemSlotIndex(ref uint index) => slots[index]?.ItemSlotIndex ?? index;
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private uint GetItemSlotIndex(ref uint row, ref uint col)
         {
             uint index = ToIndex(ref row, ref col);
-            return slots[index].ItemSlotIndex ?? index;
+            return slots[index]?.ItemSlotIndex ?? index;
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private uint IndexToRow(ref uint index) => index / ColCount;
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private uint IndexToCol(ref uint index) => index % ColCount;
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool CanIncreaseStack(ref IInventoryItem value, ref InventorySlot slot) => 
+        private bool CanIncreaseStack(ref IInventoryItem value, ref InventorySlot slot) =>
                      slot.StoredItem.GetType() == value.GetType()
                      && slot.StoredItem.Equals(value)
                      && slot.StoredItem.GetType().GetCustomAttribute<MaxStackCountAttribute>() is MaxStackCountAttribute attribute
@@ -205,7 +208,7 @@ namespace HephUnity.Inventory
                     {
                         uint slotIndex = GetItemSlotIndex(ref i, ref j);
                         // if there is an item in the target slot and that item is not the item we are trying to add.
-                        if (slots[slotIndex].StoredItem != null)
+                        if (slots[slotIndex]?.StoredItem != null)
                         {
                             // if the item we are trying to add is same type as the current item in the slot and there is enough space in the stack, add to the stack.
                             if (CanIncreaseStack(ref value, ref slots[slotIndex]))
@@ -220,13 +223,25 @@ namespace HephUnity.Inventory
                 }
                 // all slots that we need are empty, add the item to the targeted slot.
                 uint index = ToIndex(ref row, ref col);
-                slots[index].StoredItem = value;
-                slots[index].StackCount = 1u;
+                slots[index] = new InventorySlot()
+                {
+                    StoredItem = value,
+                    StackCount = 1u
+                };
+                uint currentIndex;
                 for (i = row; i < rowEnd; i++) // set the other slots' ItemSlotIndex property.
                 {
                     for (j = col; j < colEnd; j++)
                     {
-                        slots[GetItemSlotIndex(ref i, ref j)].ItemSlotIndex = index;
+                        currentIndex = GetItemSlotIndex(ref i, ref j);
+                        if (slots[currentIndex] == null)
+                        {
+                            slots[currentIndex] = new InventorySlot()
+                            {
+                                ItemSlotIndex = index
+                            };
+                        }
+                        slots[currentIndex].ItemSlotIndex = index;
                     }
                 }
                 ItemCount++;
@@ -236,7 +251,7 @@ namespace HephUnity.Inventory
         }
         private void InternalRemove(ref uint index, bool removeAll)
         {
-            if (slots[index].StoredItem != null)
+            if (slots[index]?.StoredItem != null)
             {
                 uint row = IndexToRow(ref index);
                 uint col = IndexToCol(ref index);
@@ -246,13 +261,12 @@ namespace HephUnity.Inventory
                     uint colEnd = col + slots[index].StoredItem.ColSize;
                     if (rowEnd > RowCount) throw new IndexOutOfRangeException("row + item.RowSize must be lesser than or equal to RowCount");
                     if (colEnd > ColCount) throw new IndexOutOfRangeException("col + item.ColSize must be lesser than or equal to ColCount");
-                    slots[index].StoredItem = null;
-                    slots[index].StackCount = 0u;
+                    slots[index] = null;
                     for (uint i = row; i < rowEnd; i++)
                     {
                         for (uint j = col; j < colEnd; j++)
                         {
-                            slots[ToIndex(ref i, ref j)].ItemSlotIndex = null;
+                            slots[ToIndex(ref i, ref j)] = null;
                         }
                     }
                 }
@@ -268,14 +282,17 @@ namespace HephUnity.Inventory
         {
             for (uint i = 0u; i < slots.Length; i++)
             {
-                if (slots[i].StoredItem != null)
+                if (slots[i] != null)
                 {
-                    yield return slots[i].StoredItem;
-                    i += slots[i].StoredItem.ColSize - 1u;
-                }
-                else if (slots[i].ItemSlotIndex is uint slotIndex)
-                {
-                    i += slots[slotIndex].StoredItem.ColSize - 1u; // skip the occupied slots with the items we have already returned.
+                    if (slots[i].StoredItem != null)
+                    {
+                        yield return slots[i].StoredItem;
+                        i += slots[i].StoredItem.ColSize - 1u;
+                    }
+                    else if (slots[i].ItemSlotIndex is uint slotIndex)
+                    {
+                        i += slots[slotIndex].StoredItem.ColSize - 1u; // skip the occupied slots with the items we have already returned.
+                    }
                 }
             }
         }
