@@ -14,16 +14,4 @@
         /// </summary>
         public uint ColSize { get; set; }
     }
-    public class Sword : IInventoryItem
-    {
-        public uint RowSize { get; set; }
-        public uint ColSize { get; set; }
-        public string Name { get; set; }
-        public Sword(string name)
-        {
-            RowSize = 3;
-            ColSize = 2;
-            Name = name;
-        }
-    }
 }
